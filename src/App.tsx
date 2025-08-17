@@ -102,11 +102,9 @@ class RandomWordsGenerator implements FloorGenerator {
       words.push(word)
     }
     
-    const floorText = words.join(' ')
-    console.log('Generated random words floor:', { wordCount, words, floorText })
     return {
       id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      text: floorText,
+      text: words.join(' '),
       typedText: '',
       correctCharacters: 0,
       incorrectCharacters: 0,
@@ -238,28 +236,28 @@ const DEFAULT_MODES: TypingMode[] = [
 ]
 
 
-interface TypingSession {
-  id: number
-  session_start: string
-  session_end: string
-  duration_seconds: number
-  total_characters: number
-  correct_characters: number
-  incorrect_characters: number
-  accuracy_percentage: number
-  wpm: number
-  sentences_completed: number
-  word_count?: number
-  created_at: string
+
+interface RunStats {
+  runId: string
+  modeId: string
+  startTime: string
+  endTime: string
+  floorsCompleted: number
+  averageWPM: number
+  averageAccuracy: number
+  totalTime: number
+  floors: FloorStats[]
 }
 
-interface DailyStats {
-  date: string
-  sessions: number
-  totalWPM: number
-  averageWPM: number
-  totalDuration: number
-  averageAccuracy: number
+interface FloorStats {
+  floorId: string
+  text: string
+  wpm: number
+  accuracy: number
+  duration: number
+  correctCharacters: number
+  incorrectCharacters: number
+  completedAt: string
 }
 
 function App() {
@@ -274,8 +272,9 @@ function App() {
   const [sideMenuOpen, setSideMenuOpen] = useState(false)
   const [showStats, setShowStats] = useState(false)
   const [showModeManager, setShowModeManager] = useState(false)
-  const [historicalSessions, setHistoricalSessions] = useState<TypingSession[]>([])
-  const [dailyStats, setDailyStats] = useState<DailyStats[]>([])
+  const [runStats, setRunStats] = useState<RunStats[]>([])
+  const [selectedModeForStats, setSelectedModeForStats] = useState<string | null>(null)
+  const [selectedRunForStats, setSelectedRunForStats] = useState<string | null>(null)
 
   // Combine default and custom modes
   const allModes = [...DEFAULT_MODES, ...customModes]
@@ -302,12 +301,40 @@ function App() {
       endTime: new Date(),
       isActive: false
     }
+    
+    // Convert Run to RunStats format for statistics tracking
+    const runStats: RunStats = {
+      runId: completedRun.id,
+      modeId: completedRun.modeId,
+      startTime: completedRun.startTime.toISOString(),
+      endTime: completedRun.endTime!.toISOString(),
+      floorsCompleted: completedRun.floorsCompleted,
+      averageWPM: completedRun.averageWPM,
+      averageAccuracy: completedRun.averageAccuracy,
+      totalTime: (completedRun.endTime!.getTime() - completedRun.startTime.getTime()) / 1000,
+      floors: completedRun.floors.map(floor => ({
+        floorId: floor.id,
+        text: floor.text,
+        wpm: floor.wpm,
+        accuracy: floor.accuracy,
+        duration: floor.endTime && floor.startTime ? 
+          (floor.endTime.getTime() - floor.startTime.getTime()) / 1000 : 0,
+        correctCharacters: floor.correctCharacters,
+        incorrectCharacters: floor.incorrectCharacters,
+        completedAt: floor.endTime?.toISOString() || new Date().toISOString()
+      }))
+    }
+    
+    // Add to run statistics and save to localStorage
+    setRunStats(prev => {
+      const updatedStats = [...prev, runStats]
+      localStorage.setItem('runStatistics', JSON.stringify(updatedStats))
+      return updatedStats
+    })
+    
     setCurrentRun(completedRun)
     setCurrentFloor(null)
 
-    // Save run to database (simplified for now)
-    console.log('Run completed:', completedRun)
-    
     // Show completion message
     alert(`Run completed! ${completedRun.floorsCompleted} floors finished with ${completedRun.averageAccuracy.toFixed(1)}% accuracy and ${completedRun.averageWPM.toFixed(1)} WPM average.`)
   }, [])
@@ -414,10 +441,19 @@ function App() {
     }
   }, [])
 
-  // Load historical data on component mount
+  // Load run statistics from localStorage
   useEffect(() => {
-    loadHistoricalData()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+    const savedRunStats = localStorage.getItem('runStatistics')
+    if (savedRunStats) {
+      try {
+        const parsedRunStats = JSON.parse(savedRunStats)
+        setRunStats(parsedRunStats)
+      } catch (error) {
+        console.error('Failed to load run statistics:', error)
+      }
+    }
+  }, [])
+
 
   // Save custom modes to localStorage
   const saveCustomModes = useCallback((modes: TypingMode[]) => {
@@ -467,68 +503,6 @@ function App() {
     return duplicatedMode
   }, [createMode])
 
-  const loadHistoricalData = useCallback(async () => {
-    try {
-      const response = await fetch('http://localhost:3001/api/typing-sessions')
-      if (response.ok) {
-        const result = await response.json()
-        if (result.success && Array.isArray(result.data)) {
-          setHistoricalSessions(result.data)
-          calculateDailyStats(result.data)
-        } else {
-          setHistoricalSessions([])
-          setDailyStats([])
-        }
-      }
-    } catch (error) {
-      console.error('Failed to load historical data:', error)
-      // Set empty array on error to prevent crashes
-      setHistoricalSessions([])
-      setDailyStats([])
-    }
-  }, [])
-
-  const calculateDailyStats = (sessions: TypingSession[]) => {
-    if (!Array.isArray(sessions) || sessions.length === 0) {
-      setDailyStats([])
-      return
-    }
-
-    const dailyMap = new Map<string, {
-      sessions: number
-      totalWPM: number
-      totalDuration: number
-      totalAccuracy: number
-    }>()
-
-    sessions.forEach(session => {
-      const date = new Date(session.session_start).toDateString()
-      const existing = dailyMap.get(date) || {
-        sessions: 0,
-        totalWPM: 0,
-        totalDuration: 0,
-        totalAccuracy: 0
-      }
-
-      dailyMap.set(date, {
-        sessions: existing.sessions + 1,
-        totalWPM: existing.totalWPM + session.wpm,
-        totalDuration: existing.totalDuration + session.duration_seconds,
-        totalAccuracy: existing.totalAccuracy + session.accuracy_percentage
-      })
-    })
-
-    const dailyStatsArray = Array.from(dailyMap.entries()).map(([date, stats]) => ({
-      date,
-      sessions: stats.sessions,
-      totalWPM: stats.totalWPM,
-      averageWPM: stats.totalWPM / stats.sessions,
-      totalDuration: stats.totalDuration,
-      averageAccuracy: stats.totalAccuracy / stats.sessions
-    })).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-
-    setDailyStats(dailyStatsArray)
-  }
 
 
 
@@ -580,12 +554,6 @@ function App() {
         
         if (currentCharIndex === currentFloor.text.length - 1) {
           // Floor completed
-          console.log('Forgiving mode floor completed:', { 
-            currentCharIndex, 
-            textLength: currentFloor.text.length, 
-            typedChar, 
-            fullText: currentFloor.text 
-          })
           updatedFloor.correctCharacters++
           updatedFloor.typedText = typedCharacters + typedChar
           setCurrentFloor(updatedFloor)
@@ -619,11 +587,6 @@ function App() {
         // Check if floor is completed correctly
         if (newTypedChars === currentFloor.text) {
           // Floor completed
-          console.log('Perfectionist mode floor completed:', { 
-            newTypedChars, 
-            floorText: currentFloor.text,
-            match: newTypedChars === currentFloor.text 
-          })
           updatedFloor.typedText = newTypedChars
           setCurrentFloor(updatedFloor)
           completeCurrentFloor()
@@ -1285,98 +1248,231 @@ function App() {
   const renderStatistics = () => {
     if (!showStats) return null
 
+    // Mode overview view
+    if (!selectedModeForStats) {
+      return (
+        <div className="statistics-panel">
+          <div className="statistics-header">
+            <h2>Typing Statistics</h2>
+            <button 
+              className="close-stats-btn"
+              onClick={() => {
+                setShowStats(false)
+                setSelectedModeForStats(null)
+                setSelectedRunForStats(null)
+              }}
+            >
+              Close
+            </button>
+          </div>
+          
+          <div className="statistics-content">
+            <div className="stats-section">
+              <h3>Statistics by Mode</h3>
+              <div className="modes-stats-grid">
+                {allModes.map((mode) => {
+                  const modeRunStats = runStats.filter(run => run.modeId === mode.id)
+                  const totalRuns = modeRunStats.length
+                  const totalFloors = modeRunStats.reduce((sum, run) => sum + run.floorsCompleted, 0)
+                  const avgWPM = totalRuns > 0 ? 
+                    modeRunStats.reduce((sum, run) => sum + run.averageWPM, 0) / totalRuns : 0
+                  const avgAccuracy = totalRuns > 0 ? 
+                    modeRunStats.reduce((sum, run) => sum + run.averageAccuracy, 0) / totalRuns : 0
+                  const bestWPM = totalRuns > 0 ? 
+                    Math.max(...modeRunStats.map(run => run.averageWPM)) : 0
+                  const lastPlayed = totalRuns > 0 ? 
+                    modeRunStats.sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime())[0].endTime : null
+
+                  return (
+                    <div 
+                      key={mode.id} 
+                      className="mode-stats-card"
+                      onClick={() => setSelectedModeForStats(mode.id)}
+                    >
+                      <div className="mode-stats-header">
+                        <h4>{mode.name}</h4>
+                        <span className="mode-type">
+                          {mode.settings.floorGeneration.type === FloorGenerationType.SEQUENTIAL_SENTENCES ? 'Sequential' :
+                           mode.settings.floorGeneration.type === FloorGenerationType.RANDOM_WORDS ? 'Random Words' :
+                           'Random Sentences'}
+                        </span>
+                      </div>
+                      
+                      <div className="mode-stats-body">
+                        <div className="stat-row">
+                          <span>Runs:</span>
+                          <span>{totalRuns}</span>
+                        </div>
+                        <div className="stat-row">
+                          <span>Floors:</span>
+                          <span>{totalFloors}</span>
+                        </div>
+                        <div className="stat-row">
+                          <span>Avg WPM:</span>
+                          <span>{avgWPM.toFixed(1)}</span>
+                        </div>
+                        <div className="stat-row">
+                          <span>Avg Accuracy:</span>
+                          <span>{avgAccuracy.toFixed(1)}%</span>
+                        </div>
+                        <div className="stat-row">
+                          <span>Best WPM:</span>
+                          <span>{bestWPM.toFixed(1)}</span>
+                        </div>
+                        {lastPlayed && (
+                          <div className="stat-row">
+                            <span>Last played:</span>
+                            <span>{new Date(lastPlayed).toLocaleDateString()}</span>
+                          </div>
+                        )}
+                      </div>
+                      
+                      {totalRuns > 0 && (
+                        <div className="mode-stats-footer">
+                          <button className="view-details-btn">View Details →</button>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    // Mode detail view
+    const selectedMode = allModes.find(m => m.id === selectedModeForStats)
+    const modeRunStats = runStats.filter(run => run.modeId === selectedModeForStats)
+    
+    if (!selectedRunForStats) {
+      return (
+        <div className="statistics-panel">
+          <div className="statistics-header">
+            <button 
+              className="back-btn"
+              onClick={() => setSelectedModeForStats(null)}
+            >
+              ← Back to Modes
+            </button>
+            <h2>{selectedMode?.name} Statistics</h2>
+            <button 
+              className="close-stats-btn"
+              onClick={() => {
+                setShowStats(false)
+                setSelectedModeForStats(null)
+                setSelectedRunForStats(null)
+              }}
+            >
+              Close
+            </button>
+          </div>
+          
+          <div className="statistics-content">
+            <div className="stats-section">
+              <h3>Progress Chart</h3>
+              <div className="progress-chart">
+                <p>Chart showing WPM and accuracy over time will be implemented here</p>
+              </div>
+            </div>
+
+            <div className="stats-section">
+              <h3>Recent Runs</h3>
+              <div className="runs-list">
+                {modeRunStats.length > 0 ? (
+                  modeRunStats
+                    .sort((a, b) => new Date(b.endTime).getTime() - new Date(a.endTime).getTime())
+                    .slice(0, 20)
+                    .map((run) => (
+                      <div 
+                        key={run.runId} 
+                        className="run-stats-row"
+                        onClick={() => setSelectedRunForStats(run.runId)}
+                      >
+                        <div className="run-date">
+                          {new Date(run.startTime).toLocaleDateString()} {new Date(run.startTime).toLocaleTimeString()}
+                        </div>
+                        <div className="run-floors">{run.floorsCompleted} floors</div>
+                        <div className="run-wpm">{run.averageWPM.toFixed(1)} WPM</div>
+                        <div className="run-accuracy">{run.averageAccuracy.toFixed(1)}%</div>
+                        <div className="run-duration">{Math.round(run.totalTime / 60)}m {Math.round(run.totalTime % 60)}s</div>
+                        <button className="view-run-btn">View Floors →</button>
+                      </div>
+                    ))
+                ) : (
+                  <div className="no-data">
+                    <p>No runs found for this mode. Complete some runs to see statistics.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )
+    }
+
+    // Run detail view (floor by floor)
+    const selectedRun = runStats.find(r => r.runId === selectedRunForStats)
+    
     return (
       <div className="statistics-panel">
         <div className="statistics-header">
-          <h2>Typing Statistics</h2>
+          <button 
+            className="back-btn"
+            onClick={() => setSelectedRunForStats(null)}
+          >
+            ← Back to Runs
+          </button>
+          <h2>Run Details - {new Date(selectedRun?.startTime || '').toLocaleDateString()}</h2>
           <button 
             className="close-stats-btn"
-            onClick={() => setShowStats(false)}
+            onClick={() => {
+              setShowStats(false)
+              setSelectedModeForStats(null)
+              setSelectedRunForStats(null)
+            }}
           >
-            ×
+            Close
           </button>
         </div>
         
         <div className="statistics-content">
           <div className="stats-section">
-            <h3>Overall Performance</h3>
-            {Array.isArray(historicalSessions) && historicalSessions.length > 0 ? (
-              <div className="overall-stats">
-                <div className="stat-card">
-                  <span className="stat-label">Total Sessions:</span>
-                  <span className="stat-value">{historicalSessions.length}</span>
-                </div>
-                <div className="stat-card">
-                  <span className="stat-label">Average WPM:</span>
-                  <span className="stat-value">
-                    {(historicalSessions.reduce((sum, s) => sum + (s.wpm || 0), 0) / historicalSessions.length).toFixed(2)}
-                  </span>
-                </div>
-                <div className="stat-card">
-                  <span className="stat-label">Best WPM:</span>
-                  <span className="stat-value">
-                    {Math.max(...historicalSessions.map(s => s.wpm || 0)).toFixed(2)}
-                  </span>
-                </div>
-                <div className="stat-card">
-                  <span className="stat-label">Average Accuracy:</span>
-                  <span className="stat-value">
-                    {(historicalSessions.reduce((sum, s) => sum + (s.accuracy_percentage || 0), 0) / historicalSessions.length).toFixed(1)}%
-                  </span>
-                </div>
+            <h3>Run Summary</h3>
+            <div className="run-summary">
+              <div className="summary-stat">
+                <span>Floors Completed:</span>
+                <span>{selectedRun?.floorsCompleted}</span>
               </div>
-            ) : (
-              <div className="no-data">
-                <p>No typing sessions found. Complete a typing session to see statistics.</p>
+              <div className="summary-stat">
+                <span>Average WPM:</span>
+                <span>{selectedRun?.averageWPM.toFixed(1)}</span>
               </div>
-            )}
-          </div>
-
-          <div className="stats-section">
-            <h3>Daily Averages</h3>
-            <div className="daily-stats">
-              {Array.isArray(dailyStats) && dailyStats.length > 0 ? 
-                dailyStats.slice(0, 7).map((day, index) => (
-                  <div key={index} className="daily-stat-row">
-                    <span className="date">{day.date}</span>
-                    <span className="sessions">{day.sessions} sessions</span>
-                    <span className="avg-wpm">{day.averageWPM.toFixed(2)} WPM</span>
-                    <span className="avg-accuracy">{day.averageAccuracy.toFixed(1)}%</span>
-                  </div>
-                )) : (
-                  <div className="no-data">
-                    <p>No daily statistics available yet.</p>
-                  </div>
-                )
-              }
+              <div className="summary-stat">
+                <span>Average Accuracy:</span>
+                <span>{selectedRun?.averageAccuracy.toFixed(1)}%</span>
+              </div>
+              <div className="summary-stat">
+                <span>Total Time:</span>
+                <span>{Math.round((selectedRun?.totalTime || 0) / 60)}m {Math.round((selectedRun?.totalTime || 0) % 60)}s</span>
+              </div>
             </div>
           </div>
 
           <div className="stats-section">
-            <h3>Recent Sessions</h3>
-            <div className="session-history">
-              {Array.isArray(historicalSessions) && historicalSessions.length > 0 ?
-                historicalSessions.slice(0, 10).map((session, index) => (
-                  <div key={index} className="session-row">
-                    <span className="session-date">
-                      {session.session_start ? new Date(session.session_start).toLocaleDateString() : 'N/A'}
-                    </span>
-                    <span className="session-time">
-                      {session.session_start ? new Date(session.session_start).toLocaleTimeString() : 'N/A'}
-                    </span>
-                    <span className="session-duration">
-                      {(session.duration_seconds || 0).toFixed(2)}s
-                    </span>
-                    <span className="session-wpm">{(session.wpm || 0).toFixed(2)} WPM</span>
-                    <span className="session-accuracy">{(session.accuracy_percentage || 0).toFixed(1)}%</span>
-                    <span className="session-words">{session.word_count || 0} words</span>
-                  </div>
-                )) : (
-                  <div className="no-data">
-                    <p>No session history available yet.</p>
-                  </div>
-                )
-              }
+            <h3>Floor by Floor Analysis</h3>
+            <div className="floors-list">
+              {selectedRun?.floors.map((floor, index) => (
+                <div key={floor.floorId} className="floor-stats-row">
+                  <div className="floor-number">Floor {index + 1}</div>
+                  <div className="floor-text">{floor.text.substring(0, 50)}...</div>
+                  <div className="floor-wpm">{floor.wpm.toFixed(1)} WPM</div>
+                  <div className="floor-accuracy">{floor.accuracy.toFixed(1)}%</div>
+                  <div className="floor-duration">{floor.duration.toFixed(1)}s</div>
+                  <div className="floor-chars">{floor.correctCharacters}/{floor.correctCharacters + floor.incorrectCharacters}</div>
+                </div>
+              )) || []}
             </div>
           </div>
         </div>
