@@ -1,7 +1,32 @@
 import { useState, useEffect, useCallback } from 'react'
 import './App.css'
 
-const FLOOR_TEXTS = [
+// Floor Generation System
+const FloorGenerationType = {
+  SEQUENTIAL_SENTENCES: 'sequential',
+  RANDOM_WORDS: 'random_words',
+  RANDOM_SENTENCES: 'random_sentences' // existing behavior
+} as const
+
+type FloorGenerationType = typeof FloorGenerationType[keyof typeof FloorGenerationType]
+
+interface FloorGenerationSettings {
+  type: FloorGenerationType
+  // Settings for sequential sentences
+  sentenceList?: string[]
+  // Settings for random words
+  wordCount?: number
+  wordLength?: { min: number, max: number }
+  includeNumbers?: boolean
+  includePunctuation?: boolean
+}
+
+interface FloorGenerator {
+  generateFloor(floorNumber: number, settings: FloorGenerationSettings): Floor
+}
+
+// Default sentence collections
+const DEFAULT_SENTENCES = [
   "The quick brown fox jumps over the lazy dog.",
   "Practice makes perfect typing skills develop.",
   "Typing speed and accuracy improve with consistent practice.",
@@ -19,17 +44,107 @@ const FLOOR_TEXTS = [
   "Advanced typists can exceed one hundred words per minute."
 ]
 
-const generateFloor = (): Floor => {
-  const randomText = FLOOR_TEXTS[Math.floor(Math.random() * FLOOR_TEXTS.length)]
-  return {
-    id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    text: randomText,
-    typedText: '',
-    correctCharacters: 0,
-    incorrectCharacters: 0,
-    accuracy: 0,
-    wpm: 0,
-    completed: false
+const COMMON_WORDS = [
+  'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'day', 'get', 'has', 'him', 'his', 'how', 'man', 'new', 'now', 'old', 'see', 'two', 'who', 'boy', 'did', 'its', 'let', 'put', 'say', 'she', 'too', 'use',
+  'about', 'after', 'again', 'back', 'because', 'before', 'being', 'between', 'both', 'came', 'come', 'could', 'each', 'from', 'give', 'good', 'have', 'here', 'into', 'just', 'know', 'like', 'long', 'look', 'made', 'make', 'many', 'most', 'much', 'only', 'over', 'said', 'some', 'take', 'than', 'that', 'their', 'them', 'time', 'very', 'want', 'water', 'way', 'well', 'were', 'what', 'when', 'where', 'which', 'will', 'with', 'work', 'would', 'your',
+  'around', 'before', 'change', 'different', 'does', 'every', 'follow', 'great', 'house', 'large', 'learn', 'letter', 'little', 'might', 'move', 'never', 'number', 'other', 'people', 'place', 'picture', 'point', 'right', 'small', 'sound', 'spell', 'still', 'study', 'think', 'those', 'through', 'under', 'world', 'write', 'years'
+]
+
+// Sequential Sentences Generator
+class SequentialSentencesGenerator implements FloorGenerator {
+  generateFloor(floorNumber: number, settings: FloorGenerationSettings): Floor {
+    const sentences = settings.sentenceList || DEFAULT_SENTENCES
+    const sentenceIndex = (floorNumber - 1) % sentences.length
+    const text = sentences[sentenceIndex]
+    
+    return {
+      id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      text,
+      typedText: '',
+      correctCharacters: 0,
+      incorrectCharacters: 0,
+      accuracy: 0,
+      wpm: 0,
+      completed: false
+    }
+  }
+}
+
+// Random Words Generator
+class RandomWordsGenerator implements FloorGenerator {
+  generateFloor(_floorNumber: number, settings: FloorGenerationSettings): Floor {
+    const wordCount = settings.wordCount || 15
+    const minLength = settings.wordLength?.min || 3
+    const maxLength = settings.wordLength?.max || 8
+    const includeNumbers = settings.includeNumbers || false
+    const includePunctuation = settings.includePunctuation || false
+    
+    // Filter words by length
+    const filteredWords = COMMON_WORDS.filter(
+      word => word.length >= minLength && word.length <= maxLength
+    )
+    
+    const words: string[] = []
+    for (let i = 0; i < wordCount; i++) {
+      let word = filteredWords[Math.floor(Math.random() * filteredWords.length)]
+      
+      // Occasionally add numbers
+      if (includeNumbers && Math.random() < 0.1) {
+        word = Math.floor(Math.random() * 1000).toString()
+      }
+      
+      // Occasionally add punctuation
+      if (includePunctuation && Math.random() < 0.15) {
+        const punctuation = ['.', ',', '!', '?', ';', ':']
+        word += punctuation[Math.floor(Math.random() * punctuation.length)]
+      }
+      
+      words.push(word)
+    }
+    
+    const floorText = words.join(' ')
+    console.log('Generated random words floor:', { wordCount, words, floorText })
+    return {
+      id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      text: floorText,
+      typedText: '',
+      correctCharacters: 0,
+      incorrectCharacters: 0,
+      accuracy: 0,
+      wpm: 0,
+      completed: false
+    }
+  }
+}
+
+// Random Sentences Generator (original behavior)
+class RandomSentencesGenerator implements FloorGenerator {
+  generateFloor(_floorNumber: number, settings: FloorGenerationSettings): Floor {
+    const sentences = settings.sentenceList || DEFAULT_SENTENCES
+    const randomText = sentences[Math.floor(Math.random() * sentences.length)]
+    return {
+      id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      text: randomText,
+      typedText: '',
+      correctCharacters: 0,
+      incorrectCharacters: 0,
+      accuracy: 0,
+      wpm: 0,
+      completed: false
+    }
+  }
+}
+
+// Factory for creating floor generators
+const createFloorGenerator = (type: FloorGenerationType): FloorGenerator => {
+  switch (type) {
+    case FloorGenerationType.SEQUENTIAL_SENTENCES:
+      return new SequentialSentencesGenerator()
+    case FloorGenerationType.RANDOM_WORDS:
+      return new RandomWordsGenerator()
+    case FloorGenerationType.RANDOM_SENTENCES:
+    default:
+      return new RandomSentencesGenerator()
   }
 }
 
@@ -52,6 +167,7 @@ interface ModeSettings {
   errorHandling: ErrorHandlingMode
   runType: RunType
   runTarget?: number // minutes for time-based, count for floor-based
+  floorGeneration: FloorGenerationSettings
 }
 
 interface TypingMode {
@@ -99,7 +215,10 @@ const DEFAULT_MODES: TypingMode[] = [
     settings: {
       errorHandling: ErrorHandlingMode.FORGIVING,
       runType: RunType.FLOOR_COUNT,
-      runTarget: 10
+      runTarget: 10,
+      floorGeneration: {
+        type: FloorGenerationType.RANDOM_SENTENCES
+      }
     },
     isDefault: true
   },
@@ -109,7 +228,10 @@ const DEFAULT_MODES: TypingMode[] = [
     settings: {
       errorHandling: ErrorHandlingMode.PERFECTIONIST,
       runType: RunType.FLOOR_COUNT,
-      runTarget: 10
+      runTarget: 10,
+      floorGeneration: {
+        type: FloorGenerationType.RANDOM_SENTENCES
+      }
     },
     isDefault: true
   }
@@ -190,15 +312,6 @@ function App() {
     alert(`Run completed! ${completedRun.floorsCompleted} floors finished with ${completedRun.averageAccuracy.toFixed(1)}% accuracy and ${completedRun.averageWPM.toFixed(1)} WPM average.`)
   }, [])
 
-  const startNewFloor = useCallback(() => {
-    const newFloor = generateFloor()
-    newFloor.startTime = new Date()
-    setCurrentFloor(newFloor)
-    setCurrentCharIndex(0)
-    setTypedCharacters('')
-    setFirstErrorPosition(null)
-    setHasError(false)
-  }, [])
 
   const completeCurrentFloor = useCallback(() => {
     if (!currentFloor || !currentRun) return
@@ -235,15 +348,26 @@ function App() {
       : 0
     updatedRun.averageWPM = updatedRun.floors.reduce((sum, f) => sum + f.wpm, 0) / updatedRun.floors.length
 
-    setCurrentRun(updatedRun)
-
     // Check if run should continue
     if (shouldContinueRun(updatedRun)) {
-      startNewFloor()
+      // Generate next floor immediately using updatedRun data
+      const nextFloorNumber = updatedRun.floorsCompleted + 1
+      const generator = createFloorGenerator(currentMode.settings.floorGeneration.type)
+      const nextFloor = generator.generateFloor(nextFloorNumber, currentMode.settings.floorGeneration)
+      nextFloor.startTime = new Date()
+      
+      // Set both run and floor at the same time
+      setCurrentRun(updatedRun)
+      setCurrentFloor(nextFloor)
+      setCurrentCharIndex(0)
+      setTypedCharacters('')
+      setFirstErrorPosition(null)
+      setHasError(false)
     } else {
+      setCurrentRun(updatedRun)
       completeCurrentRun(updatedRun)
     }
-  }, [currentFloor, currentRun, typedCharacters, shouldContinueRun, startNewFloor, completeCurrentRun])
+  }, [currentFloor, currentRun, typedCharacters, shouldContinueRun, completeCurrentRun, currentMode])
 
   const startNewRun = useCallback(() => {
     const newRun: Run = {
@@ -261,9 +385,21 @@ function App() {
       isActive: true,
       floors: []
     }
+    
+    // Generate the first floor immediately using the new run data
+    const floorNumber = 1
+    const generator = createFloorGenerator(currentMode.settings.floorGeneration.type)
+    const newFloor = generator.generateFloor(floorNumber, currentMode.settings.floorGeneration)
+    newFloor.startTime = new Date()
+    
+    // Set both run and floor at the same time
     setCurrentRun(newRun)
-    startNewFloor()
-  }, [currentMode, startNewFloor])
+    setCurrentFloor(newFloor)
+    setCurrentCharIndex(0)
+    setTypedCharacters('')
+    setFirstErrorPosition(null)
+    setHasError(false)
+  }, [currentMode])
 
   // Load custom modes from localStorage
   useEffect(() => {
@@ -444,6 +580,12 @@ function App() {
         
         if (currentCharIndex === currentFloor.text.length - 1) {
           // Floor completed
+          console.log('Forgiving mode floor completed:', { 
+            currentCharIndex, 
+            textLength: currentFloor.text.length, 
+            typedChar, 
+            fullText: currentFloor.text 
+          })
           updatedFloor.correctCharacters++
           updatedFloor.typedText = typedCharacters + typedChar
           setCurrentFloor(updatedFloor)
@@ -477,6 +619,11 @@ function App() {
         // Check if floor is completed correctly
         if (newTypedChars === currentFloor.text) {
           // Floor completed
+          console.log('Perfectionist mode floor completed:', { 
+            newTypedChars, 
+            floorText: currentFloor.text,
+            match: newTypedChars === currentFloor.text 
+          })
           updatedFloor.typedText = newTypedChars
           setCurrentFloor(updatedFloor)
           completeCurrentFloor()
@@ -604,11 +751,23 @@ function App() {
     errorHandling: ErrorHandlingMode
     runType: RunType
     runTarget: number
+    floorGenerationType: FloorGenerationType
+    wordCount: number
+    wordLengthMin: number
+    wordLengthMax: number
+    includeNumbers: boolean
+    includePunctuation: boolean
   }>({
     name: '',
     errorHandling: ErrorHandlingMode.FORGIVING,
     runType: RunType.FLOOR_COUNT,
-    runTarget: 10
+    runTarget: 10,
+    floorGenerationType: FloorGenerationType.RANDOM_SENTENCES,
+    wordCount: 15,
+    wordLengthMin: 3,
+    wordLengthMax: 8,
+    includeNumbers: false,
+    includePunctuation: false
   })
 
   const renderModeManager = () => {
@@ -619,7 +778,13 @@ function App() {
         name: '',
         errorHandling: ErrorHandlingMode.FORGIVING,
         runType: RunType.FLOOR_COUNT,
-        runTarget: 10
+        runTarget: 10,
+        floorGenerationType: FloorGenerationType.RANDOM_SENTENCES,
+        wordCount: 15,
+        wordLengthMin: 3,
+        wordLengthMax: 8,
+        includeNumbers: false,
+        includePunctuation: false
       })
       setEditingMode(null)
       setIsCreating(false)
@@ -645,11 +810,28 @@ function App() {
         return
       }
 
+      // Build floor generation settings
+      const floorGenerationSettings: FloorGenerationSettings = {
+        type: formData.floorGenerationType
+      }
+
+      // Add specific settings based on generation type
+      if (formData.floorGenerationType === FloorGenerationType.RANDOM_WORDS) {
+        floorGenerationSettings.wordCount = formData.wordCount
+        floorGenerationSettings.wordLength = {
+          min: formData.wordLengthMin,
+          max: formData.wordLengthMax
+        }
+        floorGenerationSettings.includeNumbers = formData.includeNumbers
+        floorGenerationSettings.includePunctuation = formData.includePunctuation
+      }
+
       if (isCreating) {
         createMode(trimmedName, { 
           errorHandling: formData.errorHandling,
           runType: formData.runType,
-          runTarget: formData.runTarget
+          runTarget: formData.runTarget,
+          floorGeneration: floorGenerationSettings
         })
       } else if (editingMode) {
         updateMode(editingMode.id, {
@@ -657,7 +839,8 @@ function App() {
           settings: { 
             errorHandling: formData.errorHandling,
             runType: formData.runType,
-            runTarget: formData.runTarget
+            runTarget: formData.runTarget,
+            floorGeneration: floorGenerationSettings
           }
         })
       }
@@ -666,11 +849,18 @@ function App() {
 
     const startEdit = (mode: TypingMode) => {
       setEditingMode(mode)
+      const floorGen = mode.settings.floorGeneration
       setFormData({
         name: mode.name,
         errorHandling: mode.settings.errorHandling,
         runType: mode.settings.runType,
-        runTarget: mode.settings.runTarget || 10
+        runTarget: mode.settings.runTarget || 10,
+        floorGenerationType: floorGen.type,
+        wordCount: floorGen.wordCount || 15,
+        wordLengthMin: floorGen.wordLength?.min || 3,
+        wordLengthMax: floorGen.wordLength?.max || 8,
+        includeNumbers: floorGen.includeNumbers || false,
+        includePunctuation: floorGen.includePunctuation || false
       })
       setIsCreating(false)
     }
@@ -801,6 +991,114 @@ function App() {
                   </div>
                 )}
                 
+                <div className="form-group">
+                  <label>Floor Generation:</label>
+                  <div className="radio-group">
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="floorGeneration"
+                        value={FloorGenerationType.SEQUENTIAL_SENTENCES}
+                        checked={formData.floorGenerationType === FloorGenerationType.SEQUENTIAL_SENTENCES}
+                        onChange={(e) => setFormData(prev => ({ ...prev, floorGenerationType: e.target.value as FloorGenerationType }))}
+                      />
+                      <span>Sequential Sentences</span>
+                      <small>Present pre-written sentences in the same order every time</small>
+                    </label>
+                    
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="floorGeneration"
+                        value={FloorGenerationType.RANDOM_WORDS}
+                        checked={formData.floorGenerationType === FloorGenerationType.RANDOM_WORDS}
+                        onChange={(e) => setFormData(prev => ({ ...prev, floorGenerationType: e.target.value as FloorGenerationType }))}
+                      />
+                      <span>Random Words</span>
+                      <small>Generate floors with random words of configurable length and features</small>
+                    </label>
+                    
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="floorGeneration"
+                        value={FloorGenerationType.RANDOM_SENTENCES}
+                        checked={formData.floorGenerationType === FloorGenerationType.RANDOM_SENTENCES}
+                        onChange={(e) => setFormData(prev => ({ ...prev, floorGenerationType: e.target.value as FloorGenerationType }))}
+                      />
+                      <span>Random Sentences</span>
+                      <small>Present pre-written sentences in random order each time</small>
+                    </label>
+                  </div>
+                </div>
+
+                {formData.floorGenerationType === FloorGenerationType.RANDOM_WORDS && (
+                  <>
+                    <div className="form-group">
+                      <label htmlFor="word-count">Number of words per floor:</label>
+                      <input
+                        id="word-count"
+                        type="number"
+                        min="5"
+                        max="50"
+                        value={formData.wordCount}
+                        onChange={(e) => setFormData(prev => ({ ...prev, wordCount: parseInt(e.target.value) || 15 }))}
+                        required
+                      />
+                    </div>
+                    
+                    <div className="form-group">
+                      <label htmlFor="word-length-min">Minimum word length:</label>
+                      <input
+                        id="word-length-min"
+                        type="number"
+                        min="2"
+                        max="10"
+                        value={formData.wordLengthMin}
+                        onChange={(e) => setFormData(prev => ({ ...prev, wordLengthMin: Math.min(parseInt(e.target.value) || 3, prev.wordLengthMax) }))}
+                        required
+                      />
+                    </div>
+                    
+                    <div className="form-group">
+                      <label htmlFor="word-length-max">Maximum word length:</label>
+                      <input
+                        id="word-length-max"
+                        type="number"
+                        min="3"
+                        max="15"
+                        value={formData.wordLengthMax}
+                        onChange={(e) => setFormData(prev => ({ ...prev, wordLengthMax: Math.max(parseInt(e.target.value) || 8, prev.wordLengthMin) }))}
+                        required
+                      />
+                    </div>
+                    
+                    <div className="form-group">
+                      <label className="radio-option">
+                        <input
+                          type="checkbox"
+                          checked={formData.includeNumbers}
+                          onChange={(e) => setFormData(prev => ({ ...prev, includeNumbers: e.target.checked }))}
+                        />
+                        <span>Include numbers occasionally</span>
+                        <small>Randomly include numbers in the word sequence</small>
+                      </label>
+                    </div>
+                    
+                    <div className="form-group">
+                      <label className="radio-option">
+                        <input
+                          type="checkbox"
+                          checked={formData.includePunctuation}
+                          onChange={(e) => setFormData(prev => ({ ...prev, includePunctuation: e.target.checked }))}
+                        />
+                        <span>Include punctuation occasionally</span>
+                        <small>Randomly add punctuation marks to words</small>
+                      </label>
+                    </div>
+                  </>
+                )}
+                
                 <div className="form-actions">
                   <button type="submit" className="save-btn">
                     {isCreating ? 'Create Mode' : 'Save Changes'}
@@ -849,6 +1147,12 @@ function App() {
                       mode.settings.runType === RunType.TIME_BASED ? `Time-based (${mode.settings.runTarget || 0}min)` :
                       mode.settings.runType === RunType.FLOOR_COUNT ? `Floor-count (${mode.settings.runTarget || 0} floors)` :
                       'Endless'
+                    }</p>
+                    <p><strong>Floor Generation:</strong> {
+                      mode.settings.floorGeneration.type === FloorGenerationType.SEQUENTIAL_SENTENCES ? 'Sequential Sentences' :
+                      mode.settings.floorGeneration.type === FloorGenerationType.RANDOM_WORDS ? 
+                        `Random Words (${mode.settings.floorGeneration.wordCount || 15} words)` :
+                      'Random Sentences'
                     }</p>
                     {mode.createdAt && (
                       <p><strong>Created:</strong> {new Date(mode.createdAt).toLocaleDateString()}</p>
