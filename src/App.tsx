@@ -7,31 +7,40 @@ const sentences = [
 ]
 
 const ErrorHandlingMode = {
-  STRICT: 'strict',
-  PERMISSIVE: 'permissive'
+  FORGIVING: 'forgiving',
+  PERFECTIONIST: 'perfectionist'
 } as const
 
 type ErrorHandlingMode = typeof ErrorHandlingMode[keyof typeof ErrorHandlingMode]
 
-interface TypingMode {
-  id: string
-  name: string
-  description: string
+interface ModeSettings {
   errorHandling: ErrorHandlingMode
 }
 
-const TYPING_MODES: TypingMode[] = [
+interface TypingMode {
+  id: string
+  name: string
+  settings: ModeSettings
+  isDefault: boolean
+  createdAt?: string
+}
+
+const DEFAULT_MODES: TypingMode[] = [
   {
-    id: 'strict',
-    name: 'Strict Mode',
-    description: 'Character turns red until correct key is pressed',
-    errorHandling: ErrorHandlingMode.STRICT
+    id: 'forgiving-default',
+    name: 'Forgiving Mode',
+    settings: {
+      errorHandling: ErrorHandlingMode.FORGIVING
+    },
+    isDefault: true
   },
   {
-    id: 'permissive',
-    name: 'Permissive Mode',
-    description: 'Wrong characters appear in red, use backspace to delete',
-    errorHandling: ErrorHandlingMode.PERMISSIVE
+    id: 'perfectionist-default',
+    name: 'Perfectionist Mode',
+    settings: {
+      errorHandling: ErrorHandlingMode.PERFECTIONIST
+    },
+    isDefault: true
   }
 ]
 
@@ -72,10 +81,13 @@ function App() {
   const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0)
   const [currentCharIndex, setCurrentCharIndex] = useState(0)
   const [hasError, setHasError] = useState(false)
-  const [currentMode, setCurrentMode] = useState<TypingMode>(TYPING_MODES[0])
+  const [customModes, setCustomModes] = useState<TypingMode[]>([])
+  const [currentMode, setCurrentMode] = useState<TypingMode>(DEFAULT_MODES[0])
   const [typedCharacters, setTypedCharacters] = useState<string>('')
+  const [firstErrorPosition, setFirstErrorPosition] = useState<number | null>(null)
   const [sideMenuOpen, setSideMenuOpen] = useState(false)
   const [showStats, setShowStats] = useState(false)
+  const [showModeManager, setShowModeManager] = useState(false)
   const [historicalSessions, setHistoricalSessions] = useState<TypingSession[]>([])
   const [dailyStats, setDailyStats] = useState<DailyStats[]>([])
   const [typingStats, setTypingStats] = useState<TypingStats>({
@@ -88,12 +100,75 @@ function App() {
   })
   const [sessionActive, setSessionActive] = useState(false)
 
+  // Combine default and custom modes
+  const allModes = [...DEFAULT_MODES, ...customModes]
+
   const currentSentence = sentences[currentSentenceIndex]
+
+  // Load custom modes from localStorage
+  useEffect(() => {
+    const savedModes = localStorage.getItem('customTypingModes')
+    if (savedModes) {
+      try {
+        const parsedModes = JSON.parse(savedModes)
+        setCustomModes(parsedModes)
+      } catch (error) {
+        console.error('Failed to load custom modes:', error)
+      }
+    }
+  }, [])
 
   // Load historical data on component mount
   useEffect(() => {
     loadHistoricalData()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Save custom modes to localStorage
+  const saveCustomModes = useCallback((modes: TypingMode[]) => {
+    localStorage.setItem('customTypingModes', JSON.stringify(modes))
+    setCustomModes(modes)
+  }, [])
+
+  // Mode management functions
+  const createMode = useCallback((name: string, settings: ModeSettings) => {
+    const newMode: TypingMode = {
+      id: `custom-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      name: name.trim(),
+      settings,
+      isDefault: false,
+      createdAt: new Date().toISOString()
+    }
+    const updatedModes = [...customModes, newMode]
+    saveCustomModes(updatedModes)
+    return newMode
+  }, [customModes, saveCustomModes])
+
+  const updateMode = useCallback((modeId: string, updates: Partial<Pick<TypingMode, 'name' | 'settings'>>) => {
+    const updatedModes = customModes.map(mode => 
+      mode.id === modeId ? { ...mode, ...updates } : mode
+    )
+    saveCustomModes(updatedModes)
+  }, [customModes, saveCustomModes])
+
+  const deleteMode = useCallback((modeId: string) => {
+    const updatedModes = customModes.filter(mode => mode.id !== modeId)
+    saveCustomModes(updatedModes)
+    
+    // If the deleted mode was the current mode, switch to default
+    if (currentMode.id === modeId) {
+      setCurrentMode(DEFAULT_MODES[0])
+      setCurrentSentenceIndex(0)
+      setCurrentCharIndex(0)
+      setTypedCharacters('')
+      setFirstErrorPosition(null)
+      setHasError(false)
+    }
+  }, [customModes, saveCustomModes, currentMode.id])
+
+  const duplicateMode = useCallback((mode: TypingMode) => {
+    const duplicatedMode = createMode(`${mode.name} (Copy)`, mode.settings)
+    return duplicatedMode
+  }, [createMode])
 
   const loadHistoricalData = useCallback(async () => {
     try {
@@ -266,14 +341,19 @@ function App() {
 
     const typedChar = event.key
 
-    // Handle backspace in permissive mode
-    if (typedChar === 'Backspace' && currentMode.errorHandling === ErrorHandlingMode.PERMISSIVE) {
+    // Handle backspace in perfectionist mode
+    if (typedChar === 'Backspace' && currentMode.settings.errorHandling === ErrorHandlingMode.PERFECTIONIST) {
       if (typedCharacters.length > 0) {
         // Remove last typed character
         const newTypedChars = typedCharacters.slice(0, -1)
         setTypedCharacters(newTypedChars)
         setCurrentCharIndex(newTypedChars.length)
-        setHasError(false)
+        
+        // If we backspaced to before the first error position, clear the error
+        if (firstErrorPosition !== null && newTypedChars.length <= firstErrorPosition) {
+          setFirstErrorPosition(null)
+          setHasError(false)
+        }
       }
       return
     }
@@ -289,8 +369,8 @@ function App() {
       totalKeystrokes: prev.totalKeystrokes + 1
     }))
 
-    if (currentMode.errorHandling === ErrorHandlingMode.STRICT) {
-      // Strict mode: existing behavior
+    if (currentMode.settings.errorHandling === ErrorHandlingMode.FORGIVING) {
+      // Forgiving mode: existing behavior
       const expectedChar = currentSentence[currentCharIndex]
       
       if (typedChar === expectedChar) {
@@ -330,15 +410,17 @@ function App() {
         }))
       }
     } else {
-      // Permissive mode: allow wrong characters to be typed
+      // Perfectionist mode: allow wrong characters to be typed
       const newTypedChars = typedCharacters + typedChar
       setTypedCharacters(newTypedChars)
       setCurrentCharIndex(newTypedChars.length)
       
-      const expectedChar = currentSentence[typedCharacters.length]
+      // Determine the expected character at the current correct position
+      const correctPosition = firstErrorPosition !== null ? firstErrorPosition : typedCharacters.length
+      const expectedChar = currentSentence[correctPosition]
       
-      if (typedChar === expectedChar) {
-        // Correct character
+      if (firstErrorPosition === null && typedChar === expectedChar) {
+        // No error yet and typed correct character
         setTypingStats(prev => ({
           ...prev,
           correctCharacters: prev.correctCharacters + 1
@@ -354,28 +436,30 @@ function App() {
             setCurrentSentenceIndex(0)
             setCurrentCharIndex(0)
             setTypedCharacters('')
+            setFirstErrorPosition(null)
           } else {
             // Move to next sentence
             setCurrentSentenceIndex(currentSentenceIndex + 1)
             setCurrentCharIndex(0)
             setTypedCharacters('')
+            setFirstErrorPosition(null)
           }
         }
       } else {
-        // Wrong character
+        // Either we already had an error, or this is the first wrong character
+        if (firstErrorPosition === null) {
+          // This is the first error
+          setFirstErrorPosition(typedCharacters.length)
+          setHasError(true)
+        }
+        
         setTypingStats(prev => ({
           ...prev,
           incorrectCharacters: prev.incorrectCharacters + 1
         }))
       }
-      
-      // Set error state if current position doesn't match
-      const hasCurrentError = newTypedChars.split('').some((char, index) => 
-        char !== currentSentence[index]
-      )
-      setHasError(hasCurrentError)
     }
-  }, [currentSentence, currentCharIndex, currentSentenceIndex, sessionActive, typingStats.sessionStart, endSession, currentMode, typedCharacters])
+  }, [currentSentence, currentCharIndex, currentSentenceIndex, sessionActive, typingStats.sessionStart, endSession, currentMode, typedCharacters, firstErrorPosition])
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyPress)
@@ -387,8 +471,8 @@ function App() {
       return <div className="sentence inactive">{sentence}</div>
     }
 
-    if (currentMode.errorHandling === ErrorHandlingMode.STRICT) {
-      // Strict mode: original rendering logic
+    if (currentMode.settings.errorHandling === ErrorHandlingMode.FORGIVING) {
+      // Forgiving mode: original rendering logic
       return (
         <div className="sentence active">
           {sentence.split('').map((char, index) => {
@@ -411,39 +495,63 @@ function App() {
         </div>
       )
     } else {
-      // Permissive mode: show typed characters and remaining sentence
+      // Perfectionist mode: show typed characters and remaining sentence
+      const errorPos = firstErrorPosition
+      
       return (
         <div className="sentence active">
-          {/* Render typed characters */}
-          {typedCharacters.split('').map((typedChar, index) => {
-            const expectedChar = sentence[index]
-            const isCorrect = typedChar === expectedChar
-            let className = 'char typed'
-            
-            if (!isCorrect) {
-              className += ' error'
-            }
-            
-            return (
-              <span key={`typed-${index}`} className={className}>
-                {typedChar}
-              </span>
-            )
-          })}
+          {/* Render correct characters before error */}
+          {errorPos !== null 
+            ? sentence.slice(0, errorPos).split('').map((char, index) => (
+                <span key={`correct-${index}`} className="char typed">
+                  {char}
+                </span>
+              ))
+            : typedCharacters.split('').map((typedChar, index) => {
+                // No errors yet, show typed characters as correct
+                return (
+                  <span key={`correct-${index}`} className="char typed">
+                    {typedChar}
+                  </span>
+                )
+              })
+          }
+          
+          {/* Render incorrect characters at error position */}
+          {errorPos !== null && (
+            <>
+              {typedCharacters.slice(errorPos).split('').map((typedChar, index) => (
+                <span key={`error-${index}`} className="char typed error">
+                  {typedChar}
+                </span>
+              ))}
+            </>
+          )}
           
           {/* Render current cursor position */}
-          {typedCharacters.length < sentence.length && (
+          {((errorPos === null && typedCharacters.length < sentence.length) || 
+            (errorPos !== null)) && (
             <span className="char current">
-              {sentence[typedCharacters.length]}
+              {errorPos !== null 
+                ? sentence[errorPos] 
+                : sentence[typedCharacters.length]
+              }
             </span>
           )}
           
           {/* Render remaining untyped characters */}
-          {sentence.slice(typedCharacters.length + 1).split('').map((char, index) => (
-            <span key={`untyped-${index}`} className="char untyped">
-              {char}
-            </span>
-          ))}
+          {errorPos !== null 
+            ? sentence.slice(errorPos + 1).split('').map((char, index) => (
+                <span key={`untyped-${index}`} className="char untyped">
+                  {char}
+                </span>
+              ))
+            : sentence.slice(typedCharacters.length + 1).split('').map((char, index) => (
+                <span key={`untyped-${index}`} className="char untyped">
+                  {char}
+                </span>
+              ))
+          }
         </div>
       )
     }
@@ -457,6 +565,241 @@ function App() {
     ? ((typingStats.correctCharacters / typingStats.totalKeystrokes) * 100).toFixed(1)
     : "0.0"
 
+  // Mode manager state
+  const [editingMode, setEditingMode] = useState<TypingMode | null>(null)
+  const [isCreating, setIsCreating] = useState(false)
+  const [formData, setFormData] = useState<{
+    name: string
+    errorHandling: ErrorHandlingMode
+  }>({
+    name: '',
+    errorHandling: ErrorHandlingMode.FORGIVING
+  })
+
+  const renderModeManager = () => {
+    if (!showModeManager) return null
+
+    const resetForm = () => {
+      setFormData({
+        name: '',
+        errorHandling: ErrorHandlingMode.FORGIVING
+      })
+      setEditingMode(null)
+      setIsCreating(false)
+    }
+
+    const handleSubmit = (e: React.FormEvent) => {
+      e.preventDefault()
+      const trimmedName = formData.name.trim()
+      
+      if (!trimmedName) {
+        alert('Please enter a mode name')
+        return
+      }
+
+      // Check for duplicate names
+      const isDuplicate = allModes.some(mode => 
+        mode.name.toLowerCase() === trimmedName.toLowerCase() && 
+        mode.id !== editingMode?.id
+      )
+
+      if (isDuplicate) {
+        alert('A mode with this name already exists. Please choose a different name.')
+        return
+      }
+
+      if (isCreating) {
+        createMode(trimmedName, { errorHandling: formData.errorHandling })
+      } else if (editingMode) {
+        updateMode(editingMode.id, {
+          name: trimmedName,
+          settings: { errorHandling: formData.errorHandling }
+        })
+      }
+      resetForm()
+    }
+
+    const startEdit = (mode: TypingMode) => {
+      setEditingMode(mode)
+      setFormData({
+        name: mode.name,
+        errorHandling: mode.settings.errorHandling
+      })
+      setIsCreating(false)
+    }
+
+    const startCreate = () => {
+      resetForm()
+      setIsCreating(true)
+    }
+
+    return (
+      <div className="mode-manager-panel">
+        <div className="mode-manager-header">
+          <h2>Manage Typing Modes</h2>
+          <button 
+            className="close-manager-btn"
+            onClick={() => {
+              setShowModeManager(false)
+              resetForm()
+            }}
+          >
+            Close
+          </button>
+        </div>
+        
+        <div className="mode-manager-content">
+          {/* Create/Edit Form */}
+          {(isCreating || editingMode) && (
+            <div className="mode-form-section">
+              <h3>{isCreating ? 'Create New Mode' : 'Edit Mode'}</h3>
+              <form onSubmit={handleSubmit} className="mode-form">
+                <div className="form-group">
+                  <label htmlFor="mode-name">Mode Name:</label>
+                  <input
+                    id="mode-name"
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) => setFormData(prev => ({ ...prev, name: e.target.value }))}
+                    placeholder="Enter mode name"
+                    maxLength={50}
+                    required
+                  />
+                </div>
+                
+                <div className="form-group">
+                  <label>Error Handling:</label>
+                  <div className="radio-group">
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="errorHandling"
+                        value={ErrorHandlingMode.FORGIVING}
+                        checked={formData.errorHandling === ErrorHandlingMode.FORGIVING}
+                        onChange={(e) => setFormData(prev => ({ ...prev, errorHandling: e.target.value as ErrorHandlingMode }))}
+                      />
+                      <span>Forgiving Mode</span>
+                      <small>Character turns red until correct key is pressed</small>
+                    </label>
+                    
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="errorHandling"
+                        value={ErrorHandlingMode.PERFECTIONIST}
+                        checked={formData.errorHandling === ErrorHandlingMode.PERFECTIONIST}
+                        onChange={(e) => setFormData(prev => ({ ...prev, errorHandling: e.target.value as ErrorHandlingMode }))}
+                      />
+                      <span>Perfectionist Mode</span>
+                      <small>Wrong characters appear in red, use backspace to delete</small>
+                    </label>
+                  </div>
+                </div>
+                
+                <div className="form-actions">
+                  <button type="submit" className="save-btn">
+                    {isCreating ? 'Create Mode' : 'Save Changes'}
+                  </button>
+                  <button type="button" onClick={resetForm} className="cancel-btn">
+                    Cancel
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {/* Mode List */}
+          <div className="mode-list-section">
+            <div className="section-header">
+              <div className="section-title-area">
+                <h3>Your Modes</h3>
+                <span className="mode-count">({allModes.length} total)</span>
+              </div>
+              {!isCreating && !editingMode && (
+                <button onClick={startCreate} className="create-mode-btn">
+                  + Create New Mode
+                </button>
+              )}
+            </div>
+            
+            {allModes.length > 6 && (
+              <div className="scroll-hint">
+                <p>Scroll down to see all your modes</p>
+              </div>
+            )}
+            
+            <div className="modes-grid">
+              {allModes.map((mode) => (
+                <div key={mode.id} className={`mode-card ${currentMode.id === mode.id ? 'active' : ''}`}>
+                  <div className="mode-card-header">
+                    <h4 className="mode-card-name">{mode.name}</h4>
+                    {mode.isDefault && (
+                      <span className="default-badge">Default</span>
+                    )}
+                  </div>
+                  
+                  <div className="mode-card-details">
+                    <p><strong>Error Handling:</strong> {mode.settings.errorHandling === ErrorHandlingMode.FORGIVING ? 'Forgiving' : 'Perfectionist'}</p>
+                    {mode.createdAt && (
+                      <p><strong>Created:</strong> {new Date(mode.createdAt).toLocaleDateString()}</p>
+                    )}
+                  </div>
+                  
+                  <div className="mode-card-actions">
+                    <button
+                      onClick={() => {
+                        setCurrentMode(mode)
+                        setCurrentSentenceIndex(0)
+                        setCurrentCharIndex(0)
+                        setTypedCharacters('')
+                        setFirstErrorPosition(null)
+                        setHasError(false)
+                      }}
+                      className="use-mode-btn"
+                      disabled={currentMode.id === mode.id}
+                    >
+                      {currentMode.id === mode.id ? 'Active' : 'Use Mode'}
+                    </button>
+                    
+                    <button
+                      onClick={() => duplicateMode(mode)}
+                      className="duplicate-mode-btn"
+                    >
+                      Duplicate
+                    </button>
+                    
+                    {!mode.isDefault && (
+                      <>
+                        <button
+                          onClick={() => startEdit(mode)}
+                          className="edit-mode-btn"
+                          disabled={isCreating || editingMode !== null}
+                        >
+                          Edit
+                        </button>
+                        
+                        <button
+                          onClick={() => {
+                            if (confirm(`Are you sure you want to delete "${mode.name}"?`)) {
+                              deleteMode(mode.id)
+                            }
+                          }}
+                          className="delete-mode-btn"
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const renderSideMenu = () => (
     <div className={`side-menu ${sideMenuOpen ? 'open' : ''}`}>
       <div className="side-menu-header">
@@ -469,10 +812,20 @@ function App() {
         </button>
       </div>
       <div className="side-menu-content">
+        <button 
+          className="menu-item"
+          onClick={() => {
+            setShowModeManager(true)
+            setSideMenuOpen(false)
+          }}
+        >
+          ⚙️ Manage Modes
+        </button>
+
         <div className="menu-section">
-          <h4>Typing Mode</h4>
+          <h4>Quick Mode Switch</h4>
           <div className="mode-selection">
-            {TYPING_MODES.map((mode) => (
+            {allModes.slice(0, 5).map((mode) => (
               <button
                 key={mode.id}
                 className={`mode-item ${currentMode.id === mode.id ? 'active' : ''}`}
@@ -481,14 +834,22 @@ function App() {
                   setCurrentSentenceIndex(0)
                   setCurrentCharIndex(0)
                   setTypedCharacters('')
+                  setFirstErrorPosition(null)
                   setHasError(false)
                   setSideMenuOpen(false)
                 }}
               >
                 <div className="mode-name">{mode.name}</div>
-                <div className="mode-description">{mode.description}</div>
+                <div className="mode-description">
+                  {mode.settings.errorHandling === ErrorHandlingMode.FORGIVING ? 'Forgiving Mode' : 'Perfectionist Mode'}
+                </div>
               </button>
             ))}
+            {allModes.length > 5 && (
+              <p className="more-modes-text">
+                + {allModes.length - 5} more modes available in Mode Manager
+              </p>
+            )}
           </div>
         </div>
         
@@ -622,6 +983,9 @@ function App() {
 
       {/* Statistics Panel */}
       {renderStatistics()}
+
+      {/* Mode Manager Panel */}
+      {renderModeManager()}
 
       <h1>Key Star Typing Trainer</h1>
       
