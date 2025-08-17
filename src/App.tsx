@@ -1,10 +1,37 @@
 import { useState, useEffect, useCallback } from 'react'
 import './App.css'
 
-const sentences = [
+const FLOOR_TEXTS = [
   "The quick brown fox jumps over the lazy dog.",
-  "Practice makes perfect typing skills develop."
+  "Practice makes perfect typing skills develop.",
+  "Typing speed and accuracy improve with consistent practice.",
+  "Focus on proper finger placement and smooth keystrokes.",
+  "Regular typing exercises help build muscle memory.",
+  "Maintain good posture while typing at your desk.",
+  "Take breaks to prevent strain and maintain performance.",
+  "Challenge yourself with increasingly difficult passages.",
+  "Speed comes naturally when accuracy is prioritized first.",
+  "Professional typists achieve both speed and precision.",
+  "Modern keyboards facilitate faster and more comfortable typing.",
+  "Touch typing eliminates the need to look at keys.",
+  "Rhythm and flow are essential for efficient typing.",
+  "Consistent practice leads to remarkable improvement over time.",
+  "Advanced typists can exceed one hundred words per minute."
 ]
+
+const generateFloor = (): Floor => {
+  const randomText = FLOOR_TEXTS[Math.floor(Math.random() * FLOOR_TEXTS.length)]
+  return {
+    id: `floor-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    text: randomText,
+    typedText: '',
+    correctCharacters: 0,
+    incorrectCharacters: 0,
+    accuracy: 0,
+    wpm: 0,
+    completed: false
+  }
+}
 
 const ErrorHandlingMode = {
   FORGIVING: 'forgiving',
@@ -13,8 +40,18 @@ const ErrorHandlingMode = {
 
 type ErrorHandlingMode = typeof ErrorHandlingMode[keyof typeof ErrorHandlingMode]
 
+const RunType = {
+  TIME_BASED: 'time',
+  FLOOR_COUNT: 'floors',
+  ENDLESS: 'endless'
+} as const
+
+type RunType = typeof RunType[keyof typeof RunType]
+
 interface ModeSettings {
   errorHandling: ErrorHandlingMode
+  runType: RunType
+  runTarget?: number // minutes for time-based, count for floor-based
 }
 
 interface TypingMode {
@@ -25,12 +62,44 @@ interface TypingMode {
   createdAt?: string
 }
 
+interface Floor {
+  id: string
+  text: string
+  startTime?: Date
+  endTime?: Date
+  typedText: string
+  correctCharacters: number
+  incorrectCharacters: number
+  accuracy: number
+  wpm: number
+  completed: boolean
+}
+
+interface Run {
+  id: string
+  modeId: string
+  startTime: Date
+  endTime?: Date
+  runType: RunType
+  runTarget?: number
+  floorsCompleted: number
+  totalCharacters: number
+  totalCorrectCharacters: number
+  totalIncorrectCharacters: number
+  averageAccuracy: number
+  averageWPM: number
+  isActive: boolean
+  floors: Floor[]
+}
+
 const DEFAULT_MODES: TypingMode[] = [
   {
     id: 'forgiving-default',
     name: 'Forgiving Mode',
     settings: {
-      errorHandling: ErrorHandlingMode.FORGIVING
+      errorHandling: ErrorHandlingMode.FORGIVING,
+      runType: RunType.FLOOR_COUNT,
+      runTarget: 10
     },
     isDefault: true
   },
@@ -38,20 +107,14 @@ const DEFAULT_MODES: TypingMode[] = [
     id: 'perfectionist-default',
     name: 'Perfectionist Mode',
     settings: {
-      errorHandling: ErrorHandlingMode.PERFECTIONIST
+      errorHandling: ErrorHandlingMode.PERFECTIONIST,
+      runType: RunType.FLOOR_COUNT,
+      runTarget: 10
     },
     isDefault: true
   }
 ]
 
-interface TypingStats {
-  sessionStart: Date | null
-  sessionEnd: Date | null
-  currentTime: number
-  correctCharacters: number
-  incorrectCharacters: number
-  totalKeystrokes: number
-}
 
 interface TypingSession {
   id: number
@@ -78,11 +141,12 @@ interface DailyStats {
 }
 
 function App() {
-  const [currentSentenceIndex, setCurrentSentenceIndex] = useState(0)
-  const [currentCharIndex, setCurrentCharIndex] = useState(0)
-  const [hasError, setHasError] = useState(false)
   const [customModes, setCustomModes] = useState<TypingMode[]>([])
   const [currentMode, setCurrentMode] = useState<TypingMode>(DEFAULT_MODES[0])
+  const [currentRun, setCurrentRun] = useState<Run | null>(null)
+  const [currentFloor, setCurrentFloor] = useState<Floor | null>(null)
+  const [currentCharIndex, setCurrentCharIndex] = useState(0)
+  const [hasError, setHasError] = useState(false)
   const [typedCharacters, setTypedCharacters] = useState<string>('')
   const [firstErrorPosition, setFirstErrorPosition] = useState<number | null>(null)
   const [sideMenuOpen, setSideMenuOpen] = useState(false)
@@ -90,20 +154,116 @@ function App() {
   const [showModeManager, setShowModeManager] = useState(false)
   const [historicalSessions, setHistoricalSessions] = useState<TypingSession[]>([])
   const [dailyStats, setDailyStats] = useState<DailyStats[]>([])
-  const [typingStats, setTypingStats] = useState<TypingStats>({
-    sessionStart: null,
-    sessionEnd: null,
-    currentTime: 0,
-    correctCharacters: 0,
-    incorrectCharacters: 0,
-    totalKeystrokes: 0
-  })
-  const [sessionActive, setSessionActive] = useState(false)
 
   // Combine default and custom modes
   const allModes = [...DEFAULT_MODES, ...customModes]
 
-  const currentSentence = sentences[currentSentenceIndex]
+  // Helper functions for run and floor management - declared in order to avoid circular dependencies
+  const shouldContinueRun = useCallback((run: Run) => {
+    switch (run.runType) {
+      case RunType.TIME_BASED: {
+        const elapsed = (Date.now() - run.startTime.getTime()) / (1000 * 60) // minutes
+        return elapsed < (run.runTarget || 0)
+      }
+      case RunType.FLOOR_COUNT:
+        return run.floorsCompleted < (run.runTarget || 0)
+      case RunType.ENDLESS:
+        return true
+      default:
+        return false
+    }
+  }, [])
+
+  const completeCurrentRun = useCallback(async (run: Run) => {
+    const completedRun: Run = {
+      ...run,
+      endTime: new Date(),
+      isActive: false
+    }
+    setCurrentRun(completedRun)
+    setCurrentFloor(null)
+
+    // Save run to database (simplified for now)
+    console.log('Run completed:', completedRun)
+    
+    // Show completion message
+    alert(`Run completed! ${completedRun.floorsCompleted} floors finished with ${completedRun.averageAccuracy.toFixed(1)}% accuracy and ${completedRun.averageWPM.toFixed(1)} WPM average.`)
+  }, [])
+
+  const startNewFloor = useCallback(() => {
+    const newFloor = generateFloor()
+    newFloor.startTime = new Date()
+    setCurrentFloor(newFloor)
+    setCurrentCharIndex(0)
+    setTypedCharacters('')
+    setFirstErrorPosition(null)
+    setHasError(false)
+  }, [])
+
+  const completeCurrentFloor = useCallback(() => {
+    if (!currentFloor || !currentRun) return
+
+    const now = new Date()
+    const completedFloor: Floor = {
+      ...currentFloor,
+      endTime: now,
+      completed: true,
+      typedText: typedCharacters
+    }
+
+    // Calculate floor stats
+    const duration = (now.getTime() - (completedFloor.startTime?.getTime() || 0)) / 1000
+    const wordCount = completedFloor.text.split(' ').length
+    completedFloor.wpm = duration > 0 ? (wordCount / (duration / 60)) : 0
+    completedFloor.accuracy = completedFloor.correctCharacters + completedFloor.incorrectCharacters > 0 
+      ? (completedFloor.correctCharacters / (completedFloor.correctCharacters + completedFloor.incorrectCharacters)) * 100 
+      : 0
+
+    // Update run with completed floor
+    const updatedRun: Run = {
+      ...currentRun,
+      floors: [...currentRun.floors, completedFloor],
+      floorsCompleted: currentRun.floorsCompleted + 1,
+      totalCharacters: currentRun.totalCharacters + completedFloor.text.length,
+      totalCorrectCharacters: currentRun.totalCorrectCharacters + completedFloor.correctCharacters,
+      totalIncorrectCharacters: currentRun.totalIncorrectCharacters + completedFloor.incorrectCharacters
+    }
+
+    // Calculate run averages
+    updatedRun.averageAccuracy = updatedRun.totalCorrectCharacters + updatedRun.totalIncorrectCharacters > 0
+      ? (updatedRun.totalCorrectCharacters / (updatedRun.totalCorrectCharacters + updatedRun.totalIncorrectCharacters)) * 100
+      : 0
+    updatedRun.averageWPM = updatedRun.floors.reduce((sum, f) => sum + f.wpm, 0) / updatedRun.floors.length
+
+    setCurrentRun(updatedRun)
+
+    // Check if run should continue
+    if (shouldContinueRun(updatedRun)) {
+      startNewFloor()
+    } else {
+      completeCurrentRun(updatedRun)
+    }
+  }, [currentFloor, currentRun, typedCharacters, shouldContinueRun, startNewFloor, completeCurrentRun])
+
+  const startNewRun = useCallback(() => {
+    const newRun: Run = {
+      id: `run-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      modeId: currentMode.id,
+      startTime: new Date(),
+      runType: currentMode.settings.runType,
+      runTarget: currentMode.settings.runTarget,
+      floorsCompleted: 0,
+      totalCharacters: 0,
+      totalCorrectCharacters: 0,
+      totalIncorrectCharacters: 0,
+      averageAccuracy: 0,
+      averageWPM: 0,
+      isActive: true,
+      floors: []
+    }
+    setCurrentRun(newRun)
+    startNewFloor()
+  }, [currentMode, startNewFloor])
 
   // Load custom modes from localStorage
   useEffect(() => {
@@ -157,7 +317,8 @@ function App() {
     // If the deleted mode was the current mode, switch to default
     if (currentMode.id === modeId) {
       setCurrentMode(DEFAULT_MODES[0])
-      setCurrentSentenceIndex(0)
+      setCurrentRun(null)
+      setCurrentFloor(null)
       setCurrentCharIndex(0)
       setTypedCharacters('')
       setFirstErrorPosition(null)
@@ -233,110 +394,18 @@ function App() {
     setDailyStats(dailyStatsArray)
   }
 
-  const countWords = (text: string) => {
-    return text.trim().split(/\s+/).filter(word => word.length > 0).length
-  }
 
-  // Timer effect
-  useEffect(() => {
-    let interval: number | undefined
-    
-    if (sessionActive) {
-      interval = window.setInterval(() => {
-        setTypingStats(prev => ({
-          ...prev,
-          currentTime: Date.now()
-        }))
-      }, 100) // Update every 100ms for smooth display
-    }
-
-    return () => {
-      if (interval) {
-        clearInterval(interval)
-      }
-    }
-  }, [sessionActive])
-
-  const startSession = () => {
-    const now = new Date()
-    setTypingStats({
-      sessionStart: now,
-      sessionEnd: null,
-      currentTime: now.getTime(),
-      correctCharacters: 0,
-      incorrectCharacters: 0,
-      totalKeystrokes: 0
-    })
-    setSessionActive(true)
-  }
-
-  const endSession = useCallback(async () => {
-    const sessionEnd = new Date()
-    setSessionActive(false)
-    
-    const finalStats = {
-      ...typingStats,
-      sessionEnd,
-      currentTime: sessionEnd.getTime()
-    }
-    
-    setTypingStats(finalStats)
-    
-    // Calculate session metrics
-    const durationSeconds = (sessionEnd.getTime() - (finalStats.sessionStart?.getTime() || 0)) / 1000
-    const totalCharacters = sentences.reduce((sum, sentence) => sum + sentence.length, 0)
-    const totalText = sentences.join(' ')
-    const wordCount = countWords(totalText)
-    const accuracyPercentage = finalStats.totalKeystrokes > 0 
-      ? (finalStats.correctCharacters / finalStats.totalKeystrokes) * 100 
-      : 0
-    const wpm = durationSeconds > 0 
-      ? (wordCount / (durationSeconds / 60)) 
-      : 0
-
-    // Save to database
-    try {
-      const response = await fetch('http://localhost:3001/api/typing-sessions', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          sessionStart: finalStats.sessionStart?.toISOString(),
-          sessionEnd: sessionEnd.toISOString(),
-          durationSeconds,
-          totalCharacters,
-          correctCharacters: finalStats.correctCharacters,
-          incorrectCharacters: finalStats.incorrectCharacters,
-          accuracyPercentage,
-          wpm,
-          sentencesCompleted: sentences.length,
-          wordCount
-        })
-      })
-
-      const result = await response.json()
-      if (result.success) {
-        console.log('Session saved successfully:', result.data)
-        // Reload historical data to update stats
-        loadHistoricalData()
-      }
-    } catch (error) {
-      console.error('Failed to save session:', error)
-    }
-  }, [typingStats, loadHistoricalData])
-
-  const formatTime = (timeMs: number, startMs: number) => {
-    const seconds = Math.floor((timeMs - startMs) / 1000)
-    const minutes = Math.floor(seconds / 60)
-    const remainingSeconds = seconds % 60
-    return `${minutes}:${remainingSeconds.toString().padStart(2, '0')}`
-  }
 
   const handleKeyPress = useCallback((event: KeyboardEvent) => {
-    // Start session on first keystroke
-    if (!sessionActive && !typingStats.sessionStart) {
-      startSession()
+    // Start new run if none exists
+    if (!currentRun) {
+      startNewRun()
+      return
+    }
+
+    // Ensure we have a current floor
+    if (!currentFloor) {
+      return
     }
 
     const typedChar = event.key
@@ -363,51 +432,33 @@ function App() {
       return
     }
 
-    // Update keystroke count
-    setTypingStats(prev => ({
-      ...prev,
-      totalKeystrokes: prev.totalKeystrokes + 1
-    }))
+    // Update floor keystroke tracking
+    const updatedFloor = { ...currentFloor }
 
     if (currentMode.settings.errorHandling === ErrorHandlingMode.FORGIVING) {
       // Forgiving mode: existing behavior
-      const expectedChar = currentSentence[currentCharIndex]
+      const expectedChar = currentFloor.text[currentCharIndex]
       
       if (typedChar === expectedChar) {
         setHasError(false)
         
-        // Update correct characters count
-        setTypingStats(prev => ({
-          ...prev,
-          correctCharacters: prev.correctCharacters + 1
-        }))
-        
-        if (currentCharIndex === currentSentence.length - 1) {
-          // Sentence completed
-          if (currentSentenceIndex === sentences.length - 1) {
-            // All sentences completed
-            endSession()
-            alert('Congratulations! You completed all sentences!')
-            setCurrentSentenceIndex(0)
-            setCurrentCharIndex(0)
-            setTypedCharacters('')
-          } else {
-            // Move to next sentence
-            setCurrentSentenceIndex(currentSentenceIndex + 1)
-            setCurrentCharIndex(0)
-            setTypedCharacters('')
-          }
+        if (currentCharIndex === currentFloor.text.length - 1) {
+          // Floor completed
+          updatedFloor.correctCharacters++
+          updatedFloor.typedText = typedCharacters + typedChar
+          setCurrentFloor(updatedFloor)
+          completeCurrentFloor()
         } else {
           // Move to next character
+          updatedFloor.correctCharacters++
           setCurrentCharIndex(currentCharIndex + 1)
+          setCurrentFloor(updatedFloor)
         }
       } else {
         // Wrong key pressed
         setHasError(true)
-        setTypingStats(prev => ({
-          ...prev,
-          incorrectCharacters: prev.incorrectCharacters + 1
-        }))
+        updatedFloor.incorrectCharacters++
+        setCurrentFloor(updatedFloor)
       }
     } else {
       // Perfectionist mode: allow wrong characters to be typed
@@ -417,33 +468,20 @@ function App() {
       
       // Determine the expected character at the current correct position
       const correctPosition = firstErrorPosition !== null ? firstErrorPosition : typedCharacters.length
-      const expectedChar = currentSentence[correctPosition]
+      const expectedChar = currentFloor.text[correctPosition]
       
       if (firstErrorPosition === null && typedChar === expectedChar) {
         // No error yet and typed correct character
-        setTypingStats(prev => ({
-          ...prev,
-          correctCharacters: prev.correctCharacters + 1
-        }))
+        updatedFloor.correctCharacters++
         
-        // Check if sentence is completed correctly
-        if (newTypedChars === currentSentence) {
-          // Sentence completed
-          if (currentSentenceIndex === sentences.length - 1) {
-            // All sentences completed
-            endSession()
-            alert('Congratulations! You completed all sentences!')
-            setCurrentSentenceIndex(0)
-            setCurrentCharIndex(0)
-            setTypedCharacters('')
-            setFirstErrorPosition(null)
-          } else {
-            // Move to next sentence
-            setCurrentSentenceIndex(currentSentenceIndex + 1)
-            setCurrentCharIndex(0)
-            setTypedCharacters('')
-            setFirstErrorPosition(null)
-          }
+        // Check if floor is completed correctly
+        if (newTypedChars === currentFloor.text) {
+          // Floor completed
+          updatedFloor.typedText = newTypedChars
+          setCurrentFloor(updatedFloor)
+          completeCurrentFloor()
+        } else {
+          setCurrentFloor(updatedFloor)
         }
       } else {
         // Either we already had an error, or this is the first wrong character
@@ -453,23 +491,23 @@ function App() {
           setHasError(true)
         }
         
-        setTypingStats(prev => ({
-          ...prev,
-          incorrectCharacters: prev.incorrectCharacters + 1
-        }))
+        updatedFloor.incorrectCharacters++
+        setCurrentFloor(updatedFloor)
       }
     }
-  }, [currentSentence, currentCharIndex, currentSentenceIndex, sessionActive, typingStats.sessionStart, endSession, currentMode, typedCharacters, firstErrorPosition])
+  }, [currentRun, currentFloor, currentCharIndex, currentMode, typedCharacters, firstErrorPosition, startNewRun, completeCurrentFloor])
 
   useEffect(() => {
     window.addEventListener('keydown', handleKeyPress)
     return () => window.removeEventListener('keydown', handleKeyPress)
   }, [handleKeyPress])
 
-  const renderSentence = (sentence: string, isActive: boolean) => {
-    if (!isActive) {
-      return <div className="sentence inactive">{sentence}</div>
+  const renderFloor = () => {
+    if (!currentFloor) {
+      return <div className="sentence inactive">Loading floor...</div>
     }
+
+    const sentence = currentFloor.text
 
     if (currentMode.settings.errorHandling === ErrorHandlingMode.FORGIVING) {
       // Forgiving mode: original rendering logic
@@ -557,13 +595,6 @@ function App() {
     }
   }
 
-  const currentSessionTime = typingStats.sessionStart 
-    ? formatTime(typingStats.currentTime, typingStats.sessionStart.getTime())
-    : "0:00"
-
-  const currentAccuracy = typingStats.totalKeystrokes > 0 
-    ? ((typingStats.correctCharacters / typingStats.totalKeystrokes) * 100).toFixed(1)
-    : "0.0"
 
   // Mode manager state
   const [editingMode, setEditingMode] = useState<TypingMode | null>(null)
@@ -571,9 +602,13 @@ function App() {
   const [formData, setFormData] = useState<{
     name: string
     errorHandling: ErrorHandlingMode
+    runType: RunType
+    runTarget: number
   }>({
     name: '',
-    errorHandling: ErrorHandlingMode.FORGIVING
+    errorHandling: ErrorHandlingMode.FORGIVING,
+    runType: RunType.FLOOR_COUNT,
+    runTarget: 10
   })
 
   const renderModeManager = () => {
@@ -582,7 +617,9 @@ function App() {
     const resetForm = () => {
       setFormData({
         name: '',
-        errorHandling: ErrorHandlingMode.FORGIVING
+        errorHandling: ErrorHandlingMode.FORGIVING,
+        runType: RunType.FLOOR_COUNT,
+        runTarget: 10
       })
       setEditingMode(null)
       setIsCreating(false)
@@ -609,11 +646,19 @@ function App() {
       }
 
       if (isCreating) {
-        createMode(trimmedName, { errorHandling: formData.errorHandling })
+        createMode(trimmedName, { 
+          errorHandling: formData.errorHandling,
+          runType: formData.runType,
+          runTarget: formData.runTarget
+        })
       } else if (editingMode) {
         updateMode(editingMode.id, {
           name: trimmedName,
-          settings: { errorHandling: formData.errorHandling }
+          settings: { 
+            errorHandling: formData.errorHandling,
+            runType: formData.runType,
+            runTarget: formData.runTarget
+          }
         })
       }
       resetForm()
@@ -623,7 +668,9 @@ function App() {
       setEditingMode(mode)
       setFormData({
         name: mode.name,
-        errorHandling: mode.settings.errorHandling
+        errorHandling: mode.settings.errorHandling,
+        runType: mode.settings.runType,
+        runTarget: mode.settings.runTarget || 10
       })
       setIsCreating(false)
     }
@@ -696,6 +743,64 @@ function App() {
                   </div>
                 </div>
                 
+                <div className="form-group">
+                  <label>Run Type:</label>
+                  <div className="radio-group">
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="runType"
+                        value={RunType.TIME_BASED}
+                        checked={formData.runType === RunType.TIME_BASED}
+                        onChange={(e) => setFormData(prev => ({ ...prev, runType: e.target.value as RunType }))}
+                      />
+                      <span>Time-based Run</span>
+                      <small>Run for a specific amount of time</small>
+                    </label>
+                    
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="runType"
+                        value={RunType.FLOOR_COUNT}
+                        checked={formData.runType === RunType.FLOOR_COUNT}
+                        onChange={(e) => setFormData(prev => ({ ...prev, runType: e.target.value as RunType }))}
+                      />
+                      <span>Floor-count Run</span>
+                      <small>Complete a specific number of floors</small>
+                    </label>
+                    
+                    <label className="radio-option">
+                      <input
+                        type="radio"
+                        name="runType"
+                        value={RunType.ENDLESS}
+                        checked={formData.runType === RunType.ENDLESS}
+                        onChange={(e) => setFormData(prev => ({ ...prev, runType: e.target.value as RunType }))}
+                      />
+                      <span>Endless Run</span>
+                      <small>Continue until manually stopped</small>
+                    </label>
+                  </div>
+                </div>
+                
+                {formData.runType !== RunType.ENDLESS && (
+                  <div className="form-group">
+                    <label htmlFor="run-target">
+                      {formData.runType === RunType.TIME_BASED ? 'Duration (minutes):' : 'Number of floors:'}
+                    </label>
+                    <input
+                      id="run-target"
+                      type="number"
+                      min="1"
+                      max={formData.runType === RunType.TIME_BASED ? "120" : "100"}
+                      value={formData.runTarget}
+                      onChange={(e) => setFormData(prev => ({ ...prev, runTarget: parseInt(e.target.value) || 1 }))}
+                      required
+                    />
+                  </div>
+                )}
+                
                 <div className="form-actions">
                   <button type="submit" className="save-btn">
                     {isCreating ? 'Create Mode' : 'Save Changes'}
@@ -740,6 +845,11 @@ function App() {
                   
                   <div className="mode-card-details">
                     <p><strong>Error Handling:</strong> {mode.settings.errorHandling === ErrorHandlingMode.FORGIVING ? 'Forgiving' : 'Perfectionist'}</p>
+                    <p><strong>Run Type:</strong> {
+                      mode.settings.runType === RunType.TIME_BASED ? `Time-based (${mode.settings.runTarget || 0}min)` :
+                      mode.settings.runType === RunType.FLOOR_COUNT ? `Floor-count (${mode.settings.runTarget || 0} floors)` :
+                      'Endless'
+                    }</p>
                     {mode.createdAt && (
                       <p><strong>Created:</strong> {new Date(mode.createdAt).toLocaleDateString()}</p>
                     )}
@@ -749,7 +859,8 @@ function App() {
                     <button
                       onClick={() => {
                         setCurrentMode(mode)
-                        setCurrentSentenceIndex(0)
+                        setCurrentRun(null)
+                        setCurrentFloor(null)
                         setCurrentCharIndex(0)
                         setTypedCharacters('')
                         setFirstErrorPosition(null)
@@ -831,7 +942,8 @@ function App() {
                 className={`mode-item ${currentMode.id === mode.id ? 'active' : ''}`}
                 onClick={() => {
                   setCurrentMode(mode)
-                  setCurrentSentenceIndex(0)
+                  setCurrentRun(null)
+                  setCurrentFloor(null)
                   setCurrentCharIndex(0)
                   setTypedCharacters('')
                   setFirstErrorPosition(null)
@@ -997,34 +1109,60 @@ function App() {
       
       {/* Live Statistics */}
       <div className="live-stats">
-        <div className="stat-item">
-          <span className="stat-label">Time:</span>
-          <span className="stat-value">{currentSessionTime}</span>
-        </div>
-        <div className="stat-item">
-          <span className="stat-label">Accuracy:</span>
-          <span className="stat-value">{currentAccuracy}%</span>
-        </div>
-        <div className="stat-item">
-          <span className="stat-label">Keystrokes:</span>
-          <span className="stat-value">{typingStats.totalKeystrokes}</span>
-        </div>
+        {currentRun && (
+          <>
+            <div className="stat-item">
+              <span className="stat-label">Floors:</span>
+              <span className="stat-value">{currentRun.floorsCompleted}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Accuracy:</span>
+              <span className="stat-value">{currentRun.averageAccuracy.toFixed(1)}%</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Avg WPM:</span>
+              <span className="stat-value">{currentRun.averageWPM.toFixed(1)}</span>
+            </div>
+          </>
+        )}
+        {!currentRun && (
+          <>
+            <div className="stat-item">
+              <span className="stat-label">Floors:</span>
+              <span className="stat-value">0</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Accuracy:</span>
+              <span className="stat-value">0%</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-label">Avg WPM:</span>
+              <span className="stat-value">0</span>
+            </div>
+          </>
+        )}
       </div>
 
       <div className="typing-area">
-        {sentences.map((sentence, index) => (
-          <div key={index}>
-            {renderSentence(sentence, index === currentSentenceIndex)}
-          </div>
-        ))}
+        {renderFloor()}
       </div>
       
       <div className="status">
-        <p>Sentence {currentSentenceIndex + 1} of {sentences.length}</p>
-        <p>Character {currentCharIndex + 1} of {currentSentence.length}</p>
-        {hasError && <p className="error">Wrong key! Press the correct key to continue.</p>}
-        {!sessionActive && typingStats.sessionStart && (
-          <p className="session-complete">Session completed! Stats saved to database.</p>
+        {currentRun && (
+          <>
+            <p>Floor {currentRun.floorsCompleted + 1} - {
+              currentRun.runType === RunType.TIME_BASED ? `Time-based (${currentRun.runTarget}min)` :
+              currentRun.runType === RunType.FLOOR_COUNT ? `Floor ${currentRun.floorsCompleted + 1} of ${currentRun.runTarget}` :
+              `Endless run - Floor ${currentRun.floorsCompleted + 1}`
+            }</p>
+            {currentFloor && (
+              <p>Character {currentCharIndex + 1} of {currentFloor.text.length}</p>
+            )}
+            {hasError && <p className="error">Wrong key! Press the correct key to continue.</p>}
+          </>
+        )}
+        {!currentRun && (
+          <p>Press any key to start a new run!</p>
         )}
       </div>
     </div>
